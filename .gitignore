@@ -165,3 +165,8 @@ cython_debug/
 #.idea/
 
 .DS_Store
+
+# nsystem
+*.sqlite
+nsys_profile
+saves*
