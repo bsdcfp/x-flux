@@ -213,6 +213,11 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
+            if step == 0:
+                torch.cuda.memory._record_memory_history()
+            if step == 1:
+                torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
+
             with accelerator.accumulate(dit):
                 img, prompts = batch
                 with torch.no_grad():
