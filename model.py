@@ -75,7 +75,7 @@ class Flux(nn.Module):
         )
 
         self.final_layer = LastLayer(self.hidden_size, 1, self.out_channels)
-        self.gradient_checkpointing = False
+        self.gradient_checkpointing = True
 
     def _set_gradient_checkpointing(self, module, value=False):
         if hasattr(module, "gradient_checkpointing"):

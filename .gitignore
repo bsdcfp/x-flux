@@ -170,3 +170,8 @@ cython_debug/
 *.sqlite
 nsys_profile
 saves*
+
+# images
+*.jpeg
+*.jpg
+*.png
