@@ -1,17 +1,16 @@
-# 启动容器
+<!-- TOC -->
 
-- pull image
+- [启动docker](#%E5%90%AF%E5%8A%A8docker)
+- [显存情况分析](#%E6%98%BE%E5%AD%98%E6%83%85%E5%86%B5%E5%88%86%E6%9E%90)
+- [耗时分析-nsys](#%E8%80%97%E6%97%B6%E5%88%86%E6%9E%90-nsys)
+- [Pytorch Profiler](#pytorch-profiler)
+- [HTA分析](#hta%E5%88%86%E6%9E%90)
 
+<!-- /TOC -->
+
+#  启动docker
 ```sh
-docker pull harbor.shopeemobile.com/aip/aip-image-hub/aip-prod/projects/123/pytorch2.5-cu12.6-py3.10-trt10.3:py3.10-cu12.6-pt2.5-trt10.3-vscode1.82.2-f6754f38f4
-```
-
-- start container
-
-```sh
-#!/bin/bash
 # Run the docker container with the specified parameters
-
 WORKSPACE_PATH="/home/fuping.chu"
 C_NAME="fuping-flux"
 FLAGS="-itd --privileged "
@@ -45,15 +44,24 @@ pip install -r requirements.txt
 
 - 增加代码
 
-```c
-    for epoch in range(first_epoch, args.num_train_epochs):
-        train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
-            if step == 0:
-                torch.cuda.memory._record_memory_history()
-            if step == 1:
-                torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
+```python
+# 这行代码放在import torch之后
+torch.cuda.memory._record_memory_history(True)
+
+# 这样代码放在执行完一次forward或者backward之后执行
+snapshot = torch.cuda.memory._snapshot()
+
+# 如果需要dump snapshot，这样代码也是在执行完一次forward或者backward之后执行
+torch.cuda.memory._dump_snapshot("snapshot_of_flux_train.pickle")
 ```
+
+- 转换为svg格式
+```sh
+# https://github.com/pytorch/pytorch/blob/master/torch/cuda/_memory_viz.py
+python _memory_viz.py memory snapshot_of_flux_train.pickle -o snapshot_memory.svg
+python _memory_viz.py segments snapshot_of_flux_train.pickle -o snapshot_segments.svg
+```
+
 
 - 文件解析
     - 文件有点大，一个step有1.6g，解析会有点慢
@@ -120,3 +128,71 @@ wait
 
 - 文件解析
     - 在笔记本上安装NVIDIA Nsight Systems UI客户端，打开.nsys-rep文件
+
+
+# Pytorch Profiler
+使用说明：[链接](https://pytorch.ac.cn/tutorials/intermediate/tensorboard_profiler_tutorial.html#use-profiler-to-record-execution-events)
+
+- dump json
+参考[官网示例](https://pytorch.org/docs/main/profiler.html)。
+```python
+# 定义一个分析函数
+def trace_handler(prof):
+    # 打印性能分析表，按CUDA时间总和排序，现实所有行
+    print(prof.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1))
+    # 导出chrome trace文件
+    prof.export_chrome_trace("trace_prof_flux_train_step_" + str(prof.step_num) + ".json")
+
+# 这个代码加在for循环开始前
+# schedule可以设置记录哪个step的性能
+# wait=1表示跳过第一个step，不记录
+# warmup=1表示在第二个step，warmp一次，不记录
+# activae=1表示记录第三个step
+# repeat=1，表示重复上述过程一次
+with torch.profiler.profile(
+    activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+    ],
+    schedule=torch.profiler.schedule(
+    wait=1,
+    warmup=1,
+    active=1,
+    repeat=1),
+    on_trace_ready=trace_handler
+# on_trace_ready=torch.profiler.tensorboard_trace_handler('./log')
+# used when outputting for tensorboard
+) as prof:
+    code_to_profile;
+```
+
+- 查看json
+
+通过chrome查看。接口说明[地址](https://pytorch.org/docs/stable/generated/torch.autograd.profiler.profile.export_chrome_trace.html)。
+
+本地浏览器打开：`chrome://tracing`，将文件拖入浏览器。示例
+
+![sd3 inference tracing json](assets/sd3-infer-tracing.png)
+
+- 统计结果
+
+执行分析脚本，按照耗时排序，拿到统计结果。
+
+```sh
+python trace_prof_statics.py --prof trace_prof_sd3.json --debug true | tee trace_prof_flux_analyze.txt
+```
+
+分析结果如下：
+
+# HTA分析
+使用说明：[链接](https://hta.readthedocs.io/en/latest/index.html)
+- 获取trace数据
+- 安装HTA
+
+```sh
+pip install HolisticTraceAnalysis
+```
+- HTA分析
+
+- 

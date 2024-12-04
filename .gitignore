@@ -170,8 +170,12 @@ cython_debug/
 *.sqlite
 nsys_profile
 saves*
+*.nsys-rep
 
 # images
 *.jpeg
 *.jpg
 *.png
+!assets/*
+*.pickle
+wandb/
