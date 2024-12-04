@@ -1,7 +1,7 @@
 from torch import Tensor, nn
 from transformers import (CLIPTextModel, CLIPTokenizer, T5EncoderModel,
                           T5Tokenizer)
-
+# from ..aip_profiler import profile
 
 class HFEmbedder(nn.Module):
     def __init__(self, version: str, max_length: int, **hf_kwargs):
@@ -19,6 +19,7 @@ class HFEmbedder(nn.Module):
 
         self.hf_module = self.hf_module.eval().requires_grad_(False)
 
+    # @profile()
     def forward(self, text: list[str]) -> Tensor:
         batch_encoding = self.tokenizer(
             text,

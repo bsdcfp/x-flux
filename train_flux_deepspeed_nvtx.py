@@ -43,7 +43,7 @@ from image_datasets.dataset import loader
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
-
+import nvtx
 def get_models(name: str, device, offload: bool, is_schnell: bool):
     t5 = load_t5(device, max_length=256 if is_schnell else 512)
     clip = load_clip(device)
@@ -103,7 +103,10 @@ def main():
         if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
 
-    dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
+    # rng = nvtx.start_range(message="get_models", color="blue")
+    with nvtx.annotate(message="get_models", color="green"):
+        dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
+    # nvtx.end_range(rng)
 
     vae.requires_grad_(False)
     t5.requires_grad_(False)
@@ -124,8 +127,8 @@ def main():
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
     )
-
-    train_dataloader = loader(**args.data_config)
+    with nvtx.annotate(message="train_dataloader", color="blue"):
+        train_dataloader = loader(**args.data_config)
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -219,10 +222,11 @@ def main():
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(dit):
                 img, prompts = batch
-                with torch.no_grad():
-                    x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
-                    inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
-                    x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
+                with nvtx.annotate(message="prepare_input", color="blue"):
+                    with torch.no_grad():
+                        x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
+                        inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
+                        x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
 
 
                 bs = img.shape[0]
@@ -235,13 +239,14 @@ def main():
                 guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
 
                 # Predict the noise residual and compute loss
-                model_pred = dit(img=x_t.to(weight_dtype),
-                                img_ids=inp['img_ids'].to(weight_dtype),
-                                txt=inp['txt'].to(weight_dtype),
-                                txt_ids=inp['txt_ids'].to(weight_dtype),
-                                y=inp['vec'].to(weight_dtype),
-                                timesteps=t.to(weight_dtype),
-                                guidance=guidance_vec.to(weight_dtype),)
+                with nvtx.annotate(message="dit forward", color="blue"):
+                    model_pred = dit(img=x_t.to(weight_dtype),
+                                    img_ids=inp['img_ids'].to(weight_dtype),
+                                    txt=inp['txt'].to(weight_dtype),
+                                    txt_ids=inp['txt_ids'].to(weight_dtype),
+                                    y=inp['vec'].to(weight_dtype),
+                                    timesteps=t.to(weight_dtype),
+                                    guidance=guidance_vec.to(weight_dtype),)
                 
                 # get a graph
                 # if step == 1:
@@ -250,19 +255,22 @@ def main():
 
 
                 #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
-                loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
+                with nvtx.annotate(message="dit loss", color="yellow"):
+                    loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
 
-                # Gather the losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                    # Gather the losses across all processes for logging (if we use distributed training).
+                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                    train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
                 # Backpropagate
-                accelerator.backward(loss)
+                with nvtx.annotate(message="dit backward", color="pink"):
+                    accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(dit.parameters(), args.max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+                with nvtx.annotate(message="dit update optimizer", color="red"):
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -312,4 +320,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # import nvtx
+    # pr = nvtx.Profile()
+    # pr.enable()
     main()
+    # pr.disable()
