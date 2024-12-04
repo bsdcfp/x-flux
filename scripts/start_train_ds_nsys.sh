@@ -2,8 +2,11 @@
 set +x
 # is_dry_run=true
 is_dry_run=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKDIR="$(dirname "$SCRIPT_DIR")"
+cd $WORKDIR
 
-ENV_PATH=/workspace/project_flux/x-flux/flux_env/master_env.sh
+ENV_PATH=flux_env/master_env.sh
 source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 DEVICES_ID=(0)
@@ -14,8 +17,6 @@ ZERO_MODE=zero2
 ACCELERATE_CONFIG=train_configs/ds_config.yaml
 # ACCELERATE_CONFIG=train_configs/ds_config_zero3.yaml
 
-WORKDIR=/workspace/project_flux/x-flux
-cd $WORKDIR
 
 rank_id=0
 for i in ${DEVICES_ID[@]}; do

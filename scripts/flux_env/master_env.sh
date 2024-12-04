@@ -1,0 +1,9 @@
+# export CUDA_VISIBLE_DEVICES=0
+# export WORLD_SIZE=4
+# export RANK=0
+export HF_HOME=/model_zoo/.cache/huggingface
+export TMPDIR=/workspace/tmp
+export MASTER_ADDR=localhost
+export MASTER_PORT=12321
+export FLUX_DEV=/model_zoo/flux.1_dev/flux1-dev.safetensors
+export AE=/model_zoo/flux.1_dev/ae.safetensors

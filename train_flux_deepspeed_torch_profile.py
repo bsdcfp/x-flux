@@ -44,7 +44,7 @@ logger = get_logger(__name__, log_level="INFO")
 from torch.profiler import profile, schedule, tensorboard_trace_handler
 
 tracing_schedule = schedule(skip_first=1, wait=1, warmup=1, active=1, repeat=1)
-trace_handler = tensorboard_trace_handler(dir_name="trace_output_dir", use_gzip=True)
+trace_handler = tensorboard_trace_handler(dir_name="logs/flux", use_gzip=True)
 # torch.cuda.memory._record_memory_history(True)
 
 def get_models(name: str, device, offload: bool, is_schnell: bool):
@@ -237,6 +237,7 @@ def main():
         # used when outputting for tensorboard
         ) as prof:
             for step, batch in enumerate(train_dataloader):
+                prof.step()
                 with accelerator.accumulate(dit):
                     img, prompts = batch
                     with torch.no_grad():
@@ -320,7 +321,7 @@ def main():
 
                 if global_step >= args.max_train_steps:
                     break
-                prof.step()
+        
         # prof.export_chrome_trace("trace_prof_flux_training.json")
 
     accelerator.wait_for_everyone()

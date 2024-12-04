@@ -179,3 +179,6 @@ saves*
 !assets/*
 *.pickle
 wandb/
+
+# logs
+logs
