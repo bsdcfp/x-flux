@@ -95,5 +95,4 @@ def loader(train_batch_size, num_workers, **args):
                       batch_size=train_batch_size, 
                       num_workers=num_workers, 
                       shuffle=True,
-                      pin_memory=True,
                       drop_last=True)
