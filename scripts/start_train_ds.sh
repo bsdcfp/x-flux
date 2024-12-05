@@ -1,33 +1,34 @@
 #!/bin/bash 
 set +x
 # is_dry_run=true
+EXP_ID=$(date "+%Y%m%d-%H%M%S")
+echo "Experiment ID:  ${EXP_ID}"
+
 is_dry_run=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKDIR="$(dirname "$SCRIPT_DIR")"
 cd $WORKDIR
 
-ENV_PATH=/workspace/project_flux/x-flux/flux_env/master_env.sh
+ENV_PATH=$WORKDIR/scripts/flux_env/master_env.sh
 source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 DEVICES_ID=(0)
 WORLD_SIZE=${#DEVICES_ID[@]}
 ACCELERATE_CONFIG=train_configs/ds_config.yaml
 # ACCELERATE_CONFIG=train_configs/ds_config_zero3.yaml
-
+ # --config_file ${ACCELERATE_CONFIG} \
 rank_id=0
+
+# 记录开始时间
+START_TIME=$(date +%s)
+echo "Start Time: $(date)"
+
 for i in ${DEVICES_ID[@]}; do
     echo "Running On GPU_$i"
     export CUDA_VISIBLE_DEVICES=$i
     export RANK=$rank_id
-    # export PYTORCH_CUDA_ALLOC_CONF="garbage_collection_threshold:0.8,max_split_size_mb:512"
-    # export PYTORCH_CUDA_ALLOC_CONF="pinned_use_cuda_host_register:True,pinned_num_register_threads:8"
-    # export PYTORCH_CUDA_ALLOC_CONF="pinned_use_cuda_host_register:True,pinned_num_register_threads:8,roundup_power2_divisions:[256:1,512:2,1024:4,>:8]"
-    export PYTORCH_CUDA_ALLOC_CONF="backend:cudaMallocAsync"
-    # export PYTORCH_CUDA_ALLOC_CONF="backend:cudaMallocAsync,pinned_use_cuda_host_register:True,pinned_num_register_threads:8"
-    # export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
-    # export TORCH_LOGS="recompiles"
+
     cmd="accelerate launch \
-	    --config_file ${ACCELERATE_CONFIG} \
       --num_processes $WORLD_SIZE \
       --num_machines $WORLD_SIZE \
       --machine_rank $RANK \
@@ -38,13 +39,21 @@ for i in ${DEVICES_ID[@]}; do
       --mixed_precision bf16 \
       train_flux_deepspeed.py --config 'train_configs/test_finetune.yaml' "
     if [ "$is_dry_run" = false ]; then
-	    eval $cmd &
+	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
     else
-            echo "export CUDA_VISIBLE_DEVICES=$i"
-            echo "export RANK=$rank_id"
+      echo "export CUDA_VISIBLE_DEVICES=$i"
+      echo "export RANK=$rank_id"
 	    echo $cmd
     fi
 
     let rank_id+=1
 done
 wait
+
+# 记录结束时间
+END_TIME=$(date +%s)
+echo "End Time: $(date)"
+
+# 计算并输出总耗时
+ELAPSED_TIME=$((END_TIME - START_TIME))
+echo "Total Elapsed Time: $ELAPSED_TIME seconds"

@@ -39,7 +39,9 @@ from src.flux.util import (configs, load_ae, load_clip,
                        load_flow_model2, load_t5)
 
 from src.flux.aip_profiler import memory_profiler
-from image_datasets.dataset import loader
+# from image_datasets.dataset import loader
+from image_datasets.dataset_cuda import loader
+
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
@@ -223,7 +225,6 @@ def main():
                     x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
                     inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
                     x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
-
 
                 bs = img.shape[0]
                 t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
