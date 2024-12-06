@@ -14,9 +14,12 @@ source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 DEVICES_ID=(0)
 WORLD_SIZE=${#DEVICES_ID[@]}
-ACCELERATE_CONFIG=train_configs/ds_config.yaml
-# ACCELERATE_CONFIG=train_configs/ds_config_zero3.yaml
- # --config_file ${ACCELERATE_CONFIG} \
+ACCELERATE_CONFIG=train_configs/accelerate_config.yaml
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
+# --deepspeed_config_file ${DEEPSPEED_CONFIG} \
+# --config_file ${ACCELERATE_CONFIG} \
+      # --use_deepspeed \
+      # --mixed_precision bf16 \
 rank_id=0
 
 # 记录开始时间
@@ -37,6 +40,7 @@ for i in ${DEVICES_ID[@]}; do
       --deepspeed_multinode_launcher standard \
       --use_deepspeed \
       --mixed_precision bf16 \
+      --deepspeed_config_file ${DEEPSPEED_CONFIG} \
       train_flux_deepspeed.py --config 'train_configs/test_finetune.yaml' "
     if [ "$is_dry_run" = false ]; then
 	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
