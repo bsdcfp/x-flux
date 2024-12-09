@@ -40,8 +40,7 @@ for i in ${DEVICES_ID[@]}; do
       --deepspeed_multinode_launcher standard \
       --use_deepspeed \
       --mixed_precision bf16 \
-      --deepspeed_config_file ${DEEPSPEED_CONFIG} \
-      train_flux_deepspeed.py --config 'train_configs/test_finetune.yaml' "
+      train_flux_deepspeed_no_t5.py --config 'train_configs/test_finetune.yaml' "
     if [ "$is_dry_run" = false ]; then
 	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
     else

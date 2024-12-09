@@ -34,6 +34,7 @@ $cmd
 - 安装依赖
 
 ```sh
+python3 -m venv xflux_env
 cd /workspace/project_flux/x_flux
 pip install -r requirements.txt
 ```
