@@ -28,7 +28,7 @@ def monitor_gpu_usage(interval=1, duration=60, gpu_indices="0"):
     import pynvml  # 需要安装 pynvml：pip install nvidia-ml-py
     if isinstance(gpu_indices, int):
         gpu_indices = str([gpu_indices])
-    gpu_indices = [int(idx) for idx in gpu_indices.split(",")]
+    #gpu_indices = [int(idx) for idx in gpu_indices.split(",")]
 
     # 初始化 NVIDIA 管理库
     pynvml.nvmlInit()
