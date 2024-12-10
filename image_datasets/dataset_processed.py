@@ -16,21 +16,21 @@ class CustomImageDatasetProcessed(Dataset):
         return len(self.pt_files)
 
     def __getitem__(self, idx, retries=3):
-        try:
-            pt_file = self.pt_files[idx]
-            data = torch.load(pt_file, map_location='cpu')
+        while retries > 0:
+            try:
+                pt_file = self.pt_files[idx]
+                data = torch.load(pt_file, weights_only=True)
 
-            return data["img"], data["img_ids"], data["txt"], data["txt_ids"], data["vec"]
+                return data["img"], data["img_ids"], data["txt"], data["txt_ids"], data["vec"]
 
-        except Exception as e:
-            print(f"Error loading file {pt_file}: {e}")
-            if retries > 0:
-                retries = retries - 1
-                return self.__getitem__(random.randint(0, len(self.pt_files) - 1))
-            else:
-                raise Exception(f"Failed to load file after {retries} attempts.")
-            
+            except Exception as e:
+                print(f"Error loading file {pt_file}: {e}")
+                retries -= 1
+                return self.__getitem__(idx+1, retries)
+
+        raise Exception(f"Failed to load file after {retries} attempts.")
+
 def loader(train_batch_size, num_workers, **args):
-    torch.multiprocessing.set_start_method('spawn', force=True)
+    # torch.multiprocessing.set_start_method('spawn', force=True)
     dataset = CustomImageDatasetProcessed(**args)
     return DataLoader(dataset, batch_size=train_batch_size, num_workers=num_workers, shuffle=True)
