@@ -112,6 +112,8 @@ def main():
     clip.requires_grad_(False)
     dit = dit.to(torch.float32)
     dit.train()
+    dit._set_gradient_checkpointing(dit, True)
+
     optimizer_cls = torch.optim.AdamW
     #you can train your own layers
     for n, param in dit.named_parameters():

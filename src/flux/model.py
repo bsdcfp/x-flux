@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 from einops import rearrange
+from diffusers.utils import is_torch_version
+from typing import Any, Dict
 
 from .modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
                                  MLPEmbedder, SingleStreamBlock,
@@ -226,3 +228,43 @@ class Flux(nn.Module):
 
         img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
         return img
+    def compute_flops(self, img_shape, txt_shape, timesteps_shape, y_shape, guidance_shape=None):  
+        n = img_shape[0]  # Batch size  
+        img_seq_len = img_shape[1]  # Sequence length for image  
+        txt_seq_len = txt_shape[1]  # Sequence length for text  
+        
+        # Calculate FLOPs for Linear layers:  
+        flops = 0  
+        
+        # img_in  
+        flops += 2 * n * img_seq_len * self.params.hidden_size  # img_in  
+        # time_in  
+        flops += 2 * n * 256 * self.params.hidden_size  # time_in (assuming timesteps have 256 features)  
+        # vector_in  
+        flops += 2 * n * self.params.vec_in_dim * self.params.hidden_size  # vector_in  
+        # guidance_in (if applicable)  
+        if self.params.guidance_embed:  
+            flops += 2 * n * 256 * self.params.hidden_size  # guidance_in  
+        # txt_in  
+        flops += 2 * n * txt_shape[2] * self.params.hidden_size  # txt_in  
+        
+        # Positional embedding FLOPs (assuming it's similar to a linear layer)  
+        ids = torch.cat((torch.zeros((n, txt_seq_len)), torch.zeros((n, img_seq_len))), dim=1)  # Dummy tensor for positional embedding  
+        pe_dim = txt_seq_len + img_seq_len  
+        flops += 2 * n * pe_dim * self.params.hidden_size  # pe_embedder  
+
+        # FLOPs for double blocks  
+        for block in self.double_blocks:  
+            flops += block.compute_flops(n, img_seq_len, txt_seq_len)  # Assuming each block has a method to compute its FLOPS  
+
+        # Concatenate img and txt  
+        flops += 2 * n * (img_seq_len + txt_seq_len) * self.params.hidden_size  # Concatenate operation  
+
+        # FLOPs for single blocks  
+        for block in self.single_blocks:  
+            flops += block.compute_flops(n, img_seq_len + txt_seq_len)  # Assuming each block has a method to compute its FLOPS  
+
+        # Final layer  
+        flops += 2 * n * self.params.hidden_size * 1  # Final layer, assuming one output channel  
+
+        return flops  

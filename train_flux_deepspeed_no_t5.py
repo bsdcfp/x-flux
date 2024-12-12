@@ -46,6 +46,7 @@ from image_datasets.dataset_processed import loader
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
+from torchinfo import summary  
 
 # def get_models(name: str, device, offload: bool, is_schnell: bool):
     # t5 = load_t5(device, max_length=256 if is_schnell else 512)
@@ -112,18 +113,22 @@ def main():
 
     # dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
     dit = get_models(name=args.model_name)
+    # print(dit)
+    # summary(dit)
     # vae.requires_grad_(False)
     # t5.requires_grad_(False)
     # clip.requires_grad_(False)
     dit = dit.to(torch.float32)
     dit.train()
+    dit._set_gradient_checkpointing(dit, True)
     optimizer_cls = torch.optim.AdamW
     #you can train your own layers
     for n, param in dit.named_parameters():
         if 'txt_attn' not in n:
             param.requires_grad = False
-
+    summary(dit)
     print(sum([p.numel() for p in dit.parameters() if p.requires_grad]) / 1000000, 'parameters')
+    # torch.compile(dit, mode="reduce-overhead", fullgraph=True)
     optimizer = optimizer_cls(
         [p for p in dit.parameters() if p.requires_grad],
         lr=args.learning_rate,
@@ -225,27 +230,20 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(dit):
-                # img, prompts = batch
-                # with torch.no_grad():
-                #     x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
-                #     inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
-                #     x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
-                # x_1, prompts = batch
-                x_1, img_ids, txt, txt_ids, vec = batch
-                x_1 = x_1.to(accelerator.device)
-                img_ids = img_ids.to(accelerator.device)
-                txt = txt.to(accelerator.device)
-                txt_ids = txt_ids.to(accelerator.device)
-                vec = vec.to(accelerator.device)
+                x_1, img_ids, txt, txt_ids, vec = [item.to(accelerator.device, non_blocking=True) for item in batch]  
+
                 
                 bs = x_1.shape[0]
                 t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
-                t_expand = t[:, None, None]
+                # t_expand = t[:, None, None]
+                t_expand = t.view(bs, 1, 1) 
                 x_0 = torch.randn_like(x_1).to(accelerator.device)
                 # x_t = (1 - t) * x_1 + t * x_0
                 x_t = (1 - t_expand) * x_1 + t_expand * x_0
                 # bsz = x_1.shape[0]
-                guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
+                guidance_vec = torch.full((bs,), 4, device=x_t.device, dtype=x_t.dtype)  
+
+                # guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
 
                 # Predict the noise residual and compute loss
                 # model_pred = dit(img=x_t.to(weight_dtype),
@@ -308,8 +306,7 @@ def main():
                                     shutil.rmtree(removing_checkpoint)
 
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        if not os.path.exists(save_path):
-                            os.mkdir(save_path)
+                        os.makedirs(save_path, exist_ok=True)
                         torch.save(dit.state_dict(), os.path.join(save_path, 'dit.bin'))
                         torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.bin'))
                         #accelerator.save_state(save_path)
@@ -326,4 +323,5 @@ def main():
 
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method('spawn', force=True)  
     main()
