@@ -5,7 +5,7 @@ from torch import Tensor, nn
 from einops import rearrange
 from diffusers.utils import is_torch_version
 from typing import Any, Dict
-
+from functools import partial, wraps
 from .modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
                                  MLPEmbedder, SingleStreamBlock,
                                  timestep_embedding)
@@ -168,18 +168,14 @@ class Flux(nn.Module):
             controlnet_depth = len(block_controlnet_hidden_states)
         for index_block, block in enumerate(self.double_blocks):
             if self.training and self.gradient_checkpointing:
-
-                def create_custom_forward(module, return_dict=None):
+                def create_custom_forward(module):
                     def custom_forward(*inputs):
-                        if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
-                        else:
-                            return module(*inputs)
+                        return module(*inputs)
 
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
+                img, txt = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     img,
                     txt,
@@ -187,6 +183,7 @@ class Flux(nn.Module):
                     pe,
                     image_proj,
                     ip_scale,
+                    **ckpt_kwargs
                 )
             else:
                 img, txt = block(
@@ -205,22 +202,19 @@ class Flux(nn.Module):
         img = torch.cat((txt, img), 1)
         for block in self.single_blocks:
             if self.training and self.gradient_checkpointing:
-
-                def create_custom_forward(module, return_dict=None):
+                def create_custom_forward(module):
                     def custom_forward(*inputs):
-                        if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
-                        else:
-                            return module(*inputs)
+                        return module(*inputs)
 
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
+                img = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     img,
                     vec,
                     pe,
+                    **ckpt_kwargs,
                 )
             else:
                 img = block(img, vec=vec, pe=pe)
@@ -268,3 +262,27 @@ class Flux(nn.Module):
         flops += 2 * n * self.params.hidden_size * 1  # Final layer, assuming one output channel  
 
         return flops  
+    
+    @property
+    def is_gradient_checkpointing(self) -> bool:
+        """
+        Whether gradient checkpointing is activated for this model or not.
+        """
+        return any(hasattr(m, "gradient_checkpointing") and m.gradient_checkpointing for m in self.modules())
+
+    def enable_gradient_checkpointing(self) -> None:
+        """
+        Activates gradient checkpointing for the current model (may be referred to as *activation checkpointing* or
+        *checkpoint activations* in other frameworks).
+        """
+        if not self._supports_gradient_checkpointing:
+            raise ValueError(f"{self.__class__.__name__} does not support gradient checkpointing.")
+        self.apply(partial(self._set_gradient_checkpointing, value=True))
+
+    def disable_gradient_checkpointing(self) -> None:
+        """
+        Deactivates gradient checkpointing for the current model (may be referred to as *activation checkpointing* or
+        *checkpoint activations* in other frameworks).
+        """
+        if self._supports_gradient_checkpointing:
+            self.apply(partial(self._set_gradient_checkpointing, value=False))
