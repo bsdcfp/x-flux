@@ -1,0 +1,28 @@
+{
+    "bf16": {
+        "enabled": true
+    },
+    "train_micro_batch_size_per_gpu": "auto",
+    "train_batch_size": "auto",
+    "gradient_accumulation_steps": 1,
+    "zero_optimization": {
+        "stage": 2,
+        "overlap_comm": false,
+        "contiguous_gradients": true,
+        "sub_group_size": 1e9,
+        "reduce_bucket_size": 8e7,
+        "offload_optimizer": {
+            "device": "none"
+        },
+        "round_robin_gradients": true
+    },
+    "gradient_clipping": 1.0,
+    "flops_profiler": {
+        "enabled": true,
+        "profile_step": 4,
+        "module_depth": -1,
+        "top_modules": 1,
+        "detailed": true,
+        "output_file": "flops_profiler.txt"
+    }
+}
