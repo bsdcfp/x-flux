@@ -1,13 +1,13 @@
 model_name: "flux-dev"
 data_config:
-  train_batch_size: 4
-  num_workers: 8
+  train_batch_size: 1
+  num_workers: 4
   img_size: 512
   img_dir: /datasets/flux_shortsentence
 report_to: wandb
-train_batch_size: 4
+train_batch_size: 1
 output_dir: saves/
-max_train_steps: 128
+max_train_steps: 328
 learning_rate: 1e-5
 lr_scheduler: constant
 lr_warmup_steps: 10

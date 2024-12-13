@@ -13,7 +13,7 @@ ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(6)
-DEVICES_ID=(0 1)
+DEVICES_ID=(0 1 2 3 4 5 6 7)
 WORLD_SIZE=${#DEVICES_ID[@]}
 ACCELERATE_CONFIG=train_configs/accelerate_config.yaml
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json

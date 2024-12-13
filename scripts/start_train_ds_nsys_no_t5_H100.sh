@@ -13,7 +13,7 @@ ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(6)
-DEVICES_ID=(0 1)
+DEVICES_ID=(0 6)
 WORLD_SIZE=${#DEVICES_ID[@]}
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
 ACCELERATE_CONFIG=train_configs/ds_config.yaml
@@ -60,7 +60,7 @@ for i in ${DEVICES_ID[@]}; do
             --deepspeed_multinode_launcher standard \
             --use_deepspeed \
             --mixed_precision bf16 \
-            train_flux_deepspeed.py --config 'train_configs/test_finetune_H100.yaml' "
+            train_flux_deepspeed_no_t5.py --config 'train_configs/test_finetune_H100.yaml' "
     fi
 
     if [ "$is_dry_run" = false ]; then
