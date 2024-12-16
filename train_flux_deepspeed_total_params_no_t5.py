@@ -74,7 +74,7 @@ def parse_args():
 
     return args.config
 
-# @memory_profiler("./snapshot_mem_timeline_flux.1_train.pickle")
+@memory_profiler(f"./snapshot_mem_timeline_flux_total_params.pickle")
 def main():
 
     args = OmegaConf.load(parse_args())
@@ -122,9 +122,10 @@ def main():
     dit.train()
     optimizer_cls = torch.optim.AdamW
     #you can train your own layers
-    for n, param in dit.named_parameters():
-        if 'txt_attn' not in n:
-            param.requires_grad = False
+    # for n, param in dit.named_parameters():
+    #     if 'txt_attn' not in n:
+    #         param.requires_grad = False
+    # summary(dit)
     print(sum([p.numel() for p in dit.parameters() if p.requires_grad]) / 1000000, 'parameters')
     # torch.compile(dit, mode="reduce-overhead", fullgraph=True)
     optimizer = optimizer_cls(

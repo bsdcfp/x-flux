@@ -1,23 +1,44 @@
 import torch
+import os
 from datetime import datetime
 
-def memory_profiler(filename):
+def memory_profiler(original_filename):
     def decorator(func):
         def wrapper(*args, **kwargs):
-            torch.cuda.memory._record_memory_history(
-                max_entries=10_000_000)
-            
+            # Start recording memory history
+            print("Starting memory recording...")
+            torch.cuda.memory._record_memory_history(max_entries=10_000_000)
+
             result = func(*args, **kwargs)
             try:
-                torch.cuda.memory._dump_snapshot(filename)
+                gpu_id = os.getenv('CUDA_VISIBLE_DEVICES', '0')
+
+                # Split filename and extension
+                filename, file_extension = os.path.splitext(original_filename)
+
+                # Insert GPU ID into the filename
+                new_filename = f"{filename}_gpu{gpu_id}{file_extension}"
+
+                # Dump memory snapshot
+                torch.cuda.memory._dump_snapshot(new_filename)
+
+                # Save memory summary to a file
+                new_summary_filename = f"{filename}_mem_summary_gpu{gpu_id}.txt"
+                with open(new_summary_filename, 'w') as summary_file:
+                    summary = torch.cuda.memory_summary()
+                    summary_file.write(summary)
+                print(f"CUDA Memory Summary saved to {new_summary_filename}")
             except Exception as e:
-                print(f"Failed to capture memory snapshot {e}")
-            
-            torch.cuda.memory._record_memory_history(enabled=None) 
+                print(f"Failed to capture memory snapshot: {e}")
+
+            # Stop recording memory history
+            print("Stopping memory recording...")
+            torch.cuda.memory._record_memory_history(enabled=False)
             return result
         return wrapper
 
     return decorator
+
 
 def trace_handler(prof, trace_file):
     """
