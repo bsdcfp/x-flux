@@ -11,15 +11,22 @@ cd $WORKDIR
 
 ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
-# DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(6)
-DEVICES_ID=(0 6)
-WORLD_SIZE=${#DEVICES_ID[@]}
-DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
-ACCELERATE_CONFIG=train_configs/ds_config.yaml
-
-ZERO_MODE=zero2
+DEVICES_ID=(2 3 4 5)
+DEVICES_ID=(4 5 6 7)
+DEVICES_ID=(1 2 3 6)
+# DEVICES_ID=(0 4 5 7)
 SINGLE_DEVICE_BATCH=4
+WORLD_SIZE=${#DEVICES_ID[@]}
+TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
+ZERO_MODE=zero2-opt
+
+# MAIN_SCRIPT=train_flux_deepspeed.py
+# NVTX_MAIN_SCRIPT=train_flux_deepspeed_nvtx.py
+MAIN_SCRIPT=train_flux_deepspeed_no_t5.py
+NVTX_MAIN_SCRIPT=train_flux_deepspeed_no_t5_nvtx.py
 
 START_TIME=$(date +%s)
 echo "Start Time: $(date)"
@@ -47,8 +54,9 @@ for i in ${DEVICES_ID[@]}; do
             --main_process_port $MASTER_PORT \
             --deepspeed_multinode_launcher standard \
             --use_deepspeed \
+            --deepspeed_config_file ${DEEPSPEED_CONFIG} \
             --mixed_precision bf16 \
-            train_flux_deepspeed_nvtx.py --config 'train_configs/test_finetune_H100.yaml' "
+            ${NVTX_MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
     else
             echo "Running On GPU_$i, RANK_$RANK"
           cmd="accelerate launch \
@@ -58,9 +66,10 @@ for i in ${DEVICES_ID[@]}; do
             --main_process_ip $MASTER_ADDR \
             --main_process_port $MASTER_PORT \
             --deepspeed_multinode_launcher standard \
+            --deepspeed_config_file ${DEEPSPEED_CONFIG} \
             --use_deepspeed \
             --mixed_precision bf16 \
-            train_flux_deepspeed.py --config 'train_configs/test_finetune_H100.yaml' "
+            ${MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
     fi
 
     if [ "$is_dry_run" = false ]; then

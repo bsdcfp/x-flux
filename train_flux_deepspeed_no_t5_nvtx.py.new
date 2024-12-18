@@ -267,7 +267,7 @@ def main():
                     accelerator.clip_grad_norm_(dit.parameters(), args.max_grad_norm)
                 nvtx.end_range(rng)
 
-                rng = nvtx.start_range("dit optimizer update", color="gray")
+                rng = nvtx.start_range("dit optimizer update", color="cyan blue")
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()

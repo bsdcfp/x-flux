@@ -3,6 +3,9 @@ import sys
 import torch
 import argparse
 import random
+import subprocess
+import time
+
 from torch.utils.data import DataLoader
 from einops import rearrange, repeat
 from omegaconf import OmegaConf
@@ -43,7 +46,8 @@ def process_one(one_data, t5, clip, vae, output_dir, index, device):
     # 保存预处理后的数据
     output_path = os.path.join(output_dir, f"processed_{index}.pt")
     torch.save(prepared_data, output_path)
-    print(f"Saved one_data {index} to {output_path}")
+    if index > 0 and index % 100 == 0:
+        print(f"Saving {index} samples to {output_dir}")
 
 def process_and_save_data(
     t5: HFEmbedder,
@@ -55,12 +59,14 @@ def process_and_save_data(
     device: str = "cuda:0",
     **kwargs
 ):
+    num_workers = kwargs.get('num_workers', 8)
+    max_workers = kwargs.get('max_workers', 1)
     train_dataloader = loader(train_batch_size=1,
-                             num_workers=8,
+                             num_workers=num_workers,
                              img_dir=input_dir,
                              img_size=img_size)
     
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for index, batch_data in enumerate(train_dataloader):
             future = executor.submit(process_one, batch_data, t5, clip, vae, output_dir, index, device)
@@ -71,34 +77,6 @@ def process_and_save_data(
                 future.result()  # This will raise an exception if the task failed
             except Exception as e:
                 print(f"An error occurred: {e}")
-
-# def process_and_save_data(
-#     t5: HFEmbedder,
-#     clip: HFEmbedder,
-#     vae: AutoEncoder,
-#     input_dir: str,
-#     output_dir: str,
-#     img_size: int = 512,
-#     device: str = "cuda:0",
-#     **kwargs
-# ):
-#     train_dataloader = loader(train_batch_size=1,
-#                              num_workers = 8,
-#                              img_dir = input_dir,
-#                              img_size = img_size)
-#     # 遍历数据集
-#     for index, batch_data in enumerate(train_dataloader):
-#         img, prompts = batch_data
-#         x_1 = vae.encode(img.to(device).to(torch.float32))
-
-#         # 准备数据
-#         prepared_data = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
-#         x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
-
-#         # 保存预处理后的数据
-#         output_path = os.path.join(output_dir, f"processed_{index}.pt")
-#         torch.save(prepared_data, output_path)
-#         print(f"Saved batch_data {index} to {output_path}")
 
 def load_and_print_file(dir_path):
     if not os.path.exists(dir_path):
@@ -137,12 +115,39 @@ def parse_args():
         action="store_true",
         help="overwrite output dir",
     )
-
+    parser.add_argument(
+            "--num_workers", 
+            type=int, 
+            default=8,
+            help="Number of workers for data loading"
+    )
+    parser.add_argument(
+            "--max_workers", 
+            type=int, 
+            default=1,
+            help="Number of threads for parallel processing"
+    )
+    parser.add_argument(
+        "--perf_test",
+        action="store_true",
+        help="test perf result of different --num_workers and --max_workers",
+    )
     args = parser.parse_args()
 
     return args
 
-if __name__ == "__main__":
+def test_workers(num_workers_list, max_workers_list):
+    results = {}
+    for nw in num_workers_list:
+        for mw in max_workers_list:
+            start = time.time()
+            process_and_save_data(..., num_workers=nw, max_workers=mw)
+            duration = time.time() - start
+            results[(nw, mw)] = duration
+            print(f"num_workers={nw}, max_workers={mw}: {duration:.2f}s")
+    return results
+
+def main():
     args = parse_args()
     config = OmegaConf.load(args.config)
 
@@ -163,7 +168,6 @@ if __name__ == "__main__":
     if load_and_print_flag:
         load_and_print_file(output_dir)
     else:
-        print(load_and_print_flag)
         is_schnell = config.model_name == "flux-schnell"
 
         vae, t5, clip = get_models(name=config.model_name, 
@@ -174,5 +178,38 @@ if __name__ == "__main__":
         t5.requires_grad_(False)
         clip.requires_grad_(False)
 
-        # 调用函数进行处理和保存
-        process_and_save_data(t5, clip, vae, config.data_config.img_dir, output_dir)
+        if args.perf_test:
+            num_workers_list = [4, 8, 16]
+            max_workers_list = [1, 2, 4]
+            for nw in num_workers_list:
+                for mw in max_workers_list:
+                    start = time.time()
+                    process_and_save_data(
+                            t5, 
+                            clip, 
+                            vae, 
+                            config.data_config.img_dir, 
+                            output_dir,
+                            num_workers=nw,
+                            max_workers=mw)
+                    duration = time.time() - start
+                    print(f"num_workers={nw}, max_workers={mw}: {duration:.2f}s")
+
+        else:
+            # 调用函数进行处理和保存
+            process_and_save_data(
+                    t5, 
+                    clip, 
+                    vae, 
+                    config.data_config.img_dir, 
+                    output_dir,
+                    num_workers=args.num_workers,
+                    max_workers=args.max_workers)
+
+            input_size = subprocess.run(['du', '-sh', config.data_config.img_dir], capture_output=True, text=True)
+            print(f"Directory size of input dir({config.data_config.img_dir}): {input_size.stdout}")
+            output_size = subprocess.run(['du', '-sh', output_dir], capture_output=True, text=True)
+            print(f"Directory size of outputdir({output_dir}): {output_size.stdout}")
+
+if __name__ == "__main__":
+    main()

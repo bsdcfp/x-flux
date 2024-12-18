@@ -4,18 +4,18 @@
     },
     "train_micro_batch_size_per_gpu": "auto",
     "train_batch_size": "auto",
-    "gradient_accumulation_steps": 1,
     "zero_optimization": {
         "stage": 2,
         "overlap_comm": true,
         "contiguous_gradients": true,
-        "sub_group_size": 1e8,
-        "reduce_bucket_size": 5e7,
+        "sub_group_size": 1e9,
+        "reduce_bucket_size": 2e8,
         "offload_optimizer": {
             "device": "none"
         },
-        "round_robin_gradients": true,
-	"memory_efficient_linear": true
+        "round_robin_gradients": true
     },
+    "deepspeed_transformer_kernel": true,
+    "gradient_accumulation_steps": 1,
     "gradient_clipping": 1.0
 }

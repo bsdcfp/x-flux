@@ -13,9 +13,9 @@ ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(6)
-DEVICES_ID=(0 2 3 4)
+DEVICES_ID=(0 1 2 3)
 WORLD_SIZE=${#DEVICES_ID[@]}
-ACCELERATE_CONFIG=train_configs/accelerate_config.yaml
+TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
       #--deepspeed_config_file ${DEEPSPEED_CONFIG} \
 
@@ -37,7 +37,7 @@ for i in ${DEVICES_ID[@]}; do
       --deepspeed_config_file ${DEEPSPEED_CONFIG} \
       --use_deepspeed \
       --mixed_precision bf16 \
-      train_flux_deepspeed.py --config 'train_configs/test_finetune_H100.yaml' "
+      train_flux_deepspeed.py --config ${TRAINING_CONFIG} "
     if [ "$is_dry_run" = false ]; then
 	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
     else

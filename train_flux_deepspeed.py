@@ -46,12 +46,29 @@ if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
 
+def deepspeed_zero_init_disabled_context_manager():
+    """
+    returns either a context list that includes one that will disable zero.Init or an empty context list
+    """
+    deepspeed_plugin = AcceleratorState().deepspeed_plugin if accelerate.state.is_initialized() else None
+    if deepspeed_plugin is None:
+        print("DeepSpeed plugin not found. Proceeding without disabling zero.Init.")
+        return []
+
+    return [deepspeed_plugin.zero3_init_context_manager(enable=False)]
+
 def get_models(name: str, device, offload: bool, is_schnell: bool):
-    t5 = load_t5(device, max_length=256 if is_schnell else 512)
-    clip = load_clip(device)
-    clip.requires_grad_(False)
-    model = load_flow_model2(name, device="cpu")
-    vae = load_ae(name, device="cpu" if offload else device)
+    with ContextManagers(deepspeed_zero_init_disabled_context_manager()):
+        t5 = load_t5(device, max_length=256 if is_schnell else 512)
+        clip = load_clip(device)
+        vae = load_ae(name, device="cpu" if offload else device)
+    deepspeed_plugin = AcceleratorState().deepspeed_plugin if accelerate.state.is_initialized() else None  
+    if deepspeed_plugin is not None:  
+        with deepspeed_plugin.zero3_init_context_manager(enable=True):  
+            model = load_flow_model2(name, device="cpu")  
+    else:  
+        model = load_flow_model2(name, device="cpu")  
+
     return model, vae, t5, clip
 
 def parse_args():
@@ -190,7 +207,6 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
         args.mixed_precision = accelerator.mixed_precision
-
 
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if overrode_max_train_steps:

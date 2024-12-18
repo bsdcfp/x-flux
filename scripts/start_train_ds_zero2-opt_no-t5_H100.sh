@@ -13,7 +13,8 @@ ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
 # DEVICES_ID=(0)
 # DEVICES_ID=(0 2)
-DEVICES_ID=(0 1 2 3)
+# DEVICES_ID=(0 1 2 3)
+DEVICES_ID=(2 3 4 5)
 # DEVICES_ID=(0 2 3 4)
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(0 1 2 3 4 5 6 7)
@@ -21,10 +22,10 @@ WORLD_SIZE=${#DEVICES_ID[@]}
 TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_default.json
-# --deepspeed_config_file ${DEEPSPEED_CONFIG} \
-# --config_file ${ACCELERATE_CONFIG} \
-      # --use_deepspeed \
-      # --mixed_precision bf16 \
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
+
+MAIN_SCRIPT=train_flux_deepspeed_mem_viz.py
+MAIN_SCRIPT=train_flux_deepspeed_no_t5.py
 
 # 记录开始时间
 START_TIME=$(date +%s)
@@ -64,7 +65,7 @@ for i in ${DEVICES_ID[@]}; do
       --use_deepspeed \
       --deepspeed_config_file ${DEEPSPEED_CONFIG} \
       --mixed_precision bf16 \
-      train_flux_deepspeed_no_t5.py --config ${TRAINING_CONFIG}"
+      ${MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
     if [ "$is_dry_run" = false ]; then
 	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
     else

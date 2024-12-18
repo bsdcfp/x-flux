@@ -9,7 +9,7 @@ from functools import partial, wraps
 from .modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
                                  MLPEmbedder, SingleStreamBlock,
                                  timestep_embedding)
-
+import nvtx
 
 @dataclass
 class FluxParams:
@@ -153,17 +153,35 @@ class Flux(nn.Module):
             raise ValueError("Input img and txt tensors must have 3 dimensions.")
 
         # running on sequences img
+        rng = nvtx.start_range("img_in:linear", color="orange")
         img = self.img_in(img)
+        nvtx.end_range(rng)
+
+        rng = nvtx.start_range("time_in:MLP", color="orange")
         vec = self.time_in(timestep_embedding(timesteps, 256))
+        nvtx.end_range(rng)
+
+        rng = nvtx.start_range("guidance_in:MLP", color="orange")
         if self.params.guidance_embed:
             if guidance is None:
                 raise ValueError("Didn't get guidance strength for guidance distilled model.")
             vec = vec + self.guidance_in(timestep_embedding(guidance, 256))
         vec = vec + self.vector_in(y)
-        txt = self.txt_in(txt)
+        nvtx.end_range(rng)
 
+        rng = nvtx.start_range("txt_in:linear", color="orange")
+        txt = self.txt_in(txt)
+        nvtx.end_range(rng)
+
+        rng = nvtx.start_range("ids:cat", color="orange")
         ids = torch.cat((txt_ids, img_ids), dim=1)
+        nvtx.end_range(rng)
+
+        rng = nvtx.start_range("pe:rope", color="orange")
         pe = self.pe_embedder(ids)
+        nvtx.end_range(rng)
+
+        rng = nvtx.start_range("double blocks", color="orange")
         if block_controlnet_hidden_states is not None:
             controlnet_depth = len(block_controlnet_hidden_states)
         for index_block, block in enumerate(self.double_blocks):
@@ -197,8 +215,10 @@ class Flux(nn.Module):
             # controlnet residual
             if block_controlnet_hidden_states is not None:
                 img = img + block_controlnet_hidden_states[index_block % 2]
+        nvtx.end_range(rng)
 
 
+        rng = nvtx.start_range("single blocks", color="orange")
         img = torch.cat((txt, img), 1)
         for block in self.single_blocks:
             if self.training and self.gradient_checkpointing:
@@ -219,49 +239,12 @@ class Flux(nn.Module):
             else:
                 img = block(img, vec=vec, pe=pe)
         img = img[:, txt.shape[1] :, ...]
+        nvtx.end_range(rng)
 
+        rng = nvtx.start_range("final layer", color="orange")
         img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
+        nvtx.end_range(rng)
         return img
-    def compute_flops(self, img_shape, txt_shape, timesteps_shape, y_shape, guidance_shape=None):  
-        n = img_shape[0]  # Batch size  
-        img_seq_len = img_shape[1]  # Sequence length for image  
-        txt_seq_len = txt_shape[1]  # Sequence length for text  
-        
-        # Calculate FLOPs for Linear layers:  
-        flops = 0  
-        
-        # img_in  
-        flops += 2 * n * img_seq_len * self.params.hidden_size  # img_in  
-        # time_in  
-        flops += 2 * n * 256 * self.params.hidden_size  # time_in (assuming timesteps have 256 features)  
-        # vector_in  
-        flops += 2 * n * self.params.vec_in_dim * self.params.hidden_size  # vector_in  
-        # guidance_in (if applicable)  
-        if self.params.guidance_embed:  
-            flops += 2 * n * 256 * self.params.hidden_size  # guidance_in  
-        # txt_in  
-        flops += 2 * n * txt_shape[2] * self.params.hidden_size  # txt_in  
-        
-        # Positional embedding FLOPs (assuming it's similar to a linear layer)  
-        ids = torch.cat((torch.zeros((n, txt_seq_len)), torch.zeros((n, img_seq_len))), dim=1)  # Dummy tensor for positional embedding  
-        pe_dim = txt_seq_len + img_seq_len  
-        flops += 2 * n * pe_dim * self.params.hidden_size  # pe_embedder  
-
-        # FLOPs for double blocks  
-        for block in self.double_blocks:  
-            flops += block.compute_flops(n, img_seq_len, txt_seq_len)  # Assuming each block has a method to compute its FLOPS  
-
-        # Concatenate img and txt  
-        flops += 2 * n * (img_seq_len + txt_seq_len) * self.params.hidden_size  # Concatenate operation  
-
-        # FLOPs for single blocks  
-        for block in self.single_blocks:  
-            flops += block.compute_flops(n, img_seq_len + txt_seq_len)  # Assuming each block has a method to compute its FLOPS  
-
-        # Final layer  
-        flops += 2 * n * self.params.hidden_size * 1  # Final layer, assuming one output channel  
-
-        return flops  
     
     @property
     def is_gradient_checkpointing(self) -> bool:
