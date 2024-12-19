@@ -9,7 +9,7 @@ from functools import partial, wraps
 from .modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
                                  MLPEmbedder, SingleStreamBlock,
                                  timestep_embedding)
-import nvtx
+from .nvtx_context import NVTXContext
 
 @dataclass
 class FluxParams:
@@ -151,99 +151,90 @@ class Flux(nn.Module):
     ) -> Tensor:
         if img.ndim != 3 or txt.ndim != 3:
             raise ValueError("Input img and txt tensors must have 3 dimensions.")
-
         # running on sequences img
-        rng = nvtx.start_range("img_in:linear", color="orange")
-        img = self.img_in(img)
-        nvtx.end_range(rng)
+        with NVTXContext.range("img_in:linear"):
+            img = self.img_in(img)
 
-        rng = nvtx.start_range("time_in:MLP", color="orange")
-        vec = self.time_in(timestep_embedding(timesteps, 256))
-        nvtx.end_range(rng)
+        with NVTXContext.range("time_in:MLP"):
+            vec = self.time_in(timestep_embedding(timesteps, 256))
 
-        rng = nvtx.start_range("guidance_in:MLP", color="orange")
-        if self.params.guidance_embed:
-            if guidance is None:
-                raise ValueError("Didn't get guidance strength for guidance distilled model.")
+
+        with NVTXContext.range("guidance_in:MLP"):
+            if self.params.guidance_embed:
+                if guidance is None:
+                    raise ValueError("Didn't get guidance strength for guidance distilled model.")
             vec = vec + self.guidance_in(timestep_embedding(guidance, 256))
         vec = vec + self.vector_in(y)
-        nvtx.end_range(rng)
 
-        rng = nvtx.start_range("txt_in:linear", color="orange")
-        txt = self.txt_in(txt)
-        nvtx.end_range(rng)
+        with NVTXContext.range("txt_in:linear"):
+            txt = self.txt_in(txt)
 
-        rng = nvtx.start_range("ids:cat", color="orange")
-        ids = torch.cat((txt_ids, img_ids), dim=1)
-        nvtx.end_range(rng)
+        with NVTXContext.range("ids:cat"):
+            ids = torch.cat((txt_ids, img_ids), dim=1)
 
-        rng = nvtx.start_range("pe:rope", color="orange")
-        pe = self.pe_embedder(ids)
-        nvtx.end_range(rng)
+        with NVTXContext.range("pe:rope"):
+            pe = self.pe_embedder(ids)
 
-        rng = nvtx.start_range("double blocks", color="orange")
-        if block_controlnet_hidden_states is not None:
-            controlnet_depth = len(block_controlnet_hidden_states)
-        for index_block, block in enumerate(self.double_blocks):
-            if self.training and self.gradient_checkpointing:
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                img, txt = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    img,
-                    txt,
-                    vec,
-                    pe,
-                    image_proj,
-                    ip_scale,
-                    **ckpt_kwargs
-                )
-            else:
-                img, txt = block(
-                    img=img, 
-                    txt=txt, 
-                    vec=vec, 
-                    pe=pe, 
-                    image_proj=image_proj,
-                    ip_scale=ip_scale, 
-                )
-            # controlnet residual
+        with NVTXContext.range("double blocks"):
             if block_controlnet_hidden_states is not None:
-                img = img + block_controlnet_hidden_states[index_block % 2]
-        nvtx.end_range(rng)
+                controlnet_depth = len(block_controlnet_hidden_states)
+            for index_block, block in enumerate(self.double_blocks):
+                if self.training and self.gradient_checkpointing:
+                    def create_custom_forward(module):
+                        def custom_forward(*inputs):
+                            return module(*inputs)
+
+                        return custom_forward
+
+                    ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                    img, txt = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(block),
+                        img,
+                        txt,
+                        vec,
+                        pe,
+                        image_proj,
+                        ip_scale,
+                        **ckpt_kwargs
+                    )
+                else:
+                    img, txt = block(
+                        img=img, 
+                        txt=txt, 
+                        vec=vec, 
+                        pe=pe, 
+                        image_proj=image_proj,
+                        ip_scale=ip_scale, 
+                    )
+                # controlnet residual
+                if block_controlnet_hidden_states is not None:
+                    img = img + block_controlnet_hidden_states[index_block % 2]
+
+        with NVTXContext.range("single blocks"):
+            img = torch.cat((txt, img), 1)
+            for block in self.single_blocks:
+                if self.training and self.gradient_checkpointing:
+                    def create_custom_forward(module):
+                        def custom_forward(*inputs):
+                            return module(*inputs)
+
+                        return custom_forward
+
+                    ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                    img = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(block),
+                        img,
+                        vec,
+                        pe,
+                        **ckpt_kwargs,
+                    )
+                else:
+                    img = block(img, vec=vec, pe=pe)
+            img = img[:, txt.shape[1] :, ...]
 
 
-        rng = nvtx.start_range("single blocks", color="orange")
-        img = torch.cat((txt, img), 1)
-        for block in self.single_blocks:
-            if self.training and self.gradient_checkpointing:
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                img = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    img,
-                    vec,
-                    pe,
-                    **ckpt_kwargs,
-                )
-            else:
-                img = block(img, vec=vec, pe=pe)
-        img = img[:, txt.shape[1] :, ...]
-        nvtx.end_range(rng)
-
-        rng = nvtx.start_range("final layer", color="orange")
-        img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
-        nvtx.end_range(rng)
+        with NVTXContext.range("final layer"):
+            img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
         return img
     
     @property

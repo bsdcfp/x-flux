@@ -70,7 +70,7 @@ def benchmark_freq_calculation(half=128, max_period=10000.0, num_runs=1000):
     triton_result = triton_freq()
     
     # Verify results match
-    assert torch.allclose(torch_result, triton_result, rtol=1e-3, atol=1e-3)
+    assert torch.allclose(torch_result, triton_result, rtol=1e-5, atol=1e-5)
     
     # Benchmark
     import time
