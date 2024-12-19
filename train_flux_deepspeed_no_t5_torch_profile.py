@@ -37,23 +37,32 @@ from einops import rearrange
 from src.flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
 from src.flux.util import (configs, load_ae, load_clip,
                        load_flow_model2, load_t5)
-from image_datasets.dataset import loader
+
+from src.flux.aip_profiler import memory_profiler
+# from image_datasets.dataset import loader
+# from image_datasets.dataset_cuda import loader
+from image_datasets.dataset_processed import loader
+
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
+from torchinfo import summary  
 from torch.profiler import profile, schedule, tensorboard_trace_handler
 
 tracing_schedule = schedule(skip_first=3, wait=2, warmup=2, active=3, repeat=2)
 trace_handler = tensorboard_trace_handler(dir_name="logs/flux_torch_profile", use_gzip=True)
-# torch.cuda.memory._record_memory_history(True)
 
-def get_models(name: str, device, offload: bool, is_schnell: bool):
-    t5 = load_t5(device, max_length=256 if is_schnell else 512)
-    clip = load_clip(device)
-    clip.requires_grad_(False)
+# def get_models(name: str, device, offload: bool, is_schnell: bool):
+    # t5 = load_t5(device, max_length=256 if is_schnell else 512)
+    # clip = load_clip(device)
+    # clip.requires_grad_(False)
+    # model = load_flow_model2(name, device="cpu")
+    # vae = load_ae(name, device="cpu" if offload else device)
+    # return model, vae, t5, clip
+
+def get_models(name: str):
     model = load_flow_model2(name, device="cpu")
-    vae = load_ae(name, device="cpu" if offload else device)
-    return model, vae, t5, clip
+    return model
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -68,10 +77,8 @@ def parse_args():
 
 
     return args.config
-# def trace_handler(prof):
-    # print(prof.key_averages().table(
-    #     sort_by="self_cuda_time_total", row_limit=-1))
-    # prof.export_chrome_trace("trace_prof_flux_train_step_" + str(prof.step_num) + ".json")
+
+# @memory_profiler("./snapshot_mem_timeline_flux.1_train.pickle")
 def main():
 
     args = OmegaConf.load(parse_args())
@@ -108,11 +115,13 @@ def main():
         if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
 
-    dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
-
-    vae.requires_grad_(False)
-    t5.requires_grad_(False)
-    clip.requires_grad_(False)
+    # dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
+    dit = get_models(name=args.model_name)
+    # print(dit)
+    # summary(dit)
+    # vae.requires_grad_(False)
+    # t5.requires_grad_(False)
+    # clip.requires_grad_(False)
     dit = dit.to(torch.float32)
     dit.train()
     optimizer_cls = torch.optim.AdamW
@@ -120,8 +129,8 @@ def main():
     for n, param in dit.named_parameters():
         if 'txt_attn' not in n:
             param.requires_grad = False
-
     print(sum([p.numel() for p in dit.parameters() if p.requires_grad]) / 1000000, 'parameters')
+    # torch.compile(dit, mode="reduce-overhead", fullgraph=True)
     optimizer = optimizer_cls(
         [p for p in dit.parameters() if p.requires_grad],
         lr=args.learning_rate,
@@ -238,31 +247,27 @@ def main():
         ) as prof:
             for step, batch in enumerate(train_dataloader):
                 with accelerator.accumulate(dit):
-                    img, prompts = batch
-                    with torch.no_grad():
-                        x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
-                        inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
-                        x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
+                    x_1, img_ids, txt, txt_ids, vec = [item.to(accelerator.device, non_blocking=True) for item in batch]  
 
-
-                    bs = img.shape[0]
+                    
+                    bs = x_1.shape[0]
                     t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
-                    t_expand = t[:, None, None]
+                    # t_expand = t[:, None, None]
+                    t_expand = t.view(bs, 1, 1) 
                     x_0 = torch.randn_like(x_1).to(accelerator.device)
                     # x_t = (1 - t) * x_1 + t * x_0
                     x_t = (1 - t_expand) * x_1 + t_expand * x_0
-                    bsz = x_1.shape[0]
-                    guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
+                    # bsz = x_1.shape[0]
+                    guidance_vec = torch.full((bs,), 4, device=x_t.device, dtype=x_t.dtype)  
 
-                    # Predict the noise residual and compute loss
                     model_pred = dit(img=x_t.to(weight_dtype),
-                                    img_ids=inp['img_ids'].to(weight_dtype),
-                                    txt=inp['txt'].to(weight_dtype),
-                                    txt_ids=inp['txt_ids'].to(weight_dtype),
-                                    y=inp['vec'].to(weight_dtype),
+                                    img_ids=img_ids.to(weight_dtype),
+                                    txt=txt.to(weight_dtype),
+                                    txt_ids=txt_ids.to(weight_dtype),
+                                    y=vec.to(weight_dtype),
                                     timesteps=t.to(weight_dtype),
                                     guidance=guidance_vec.to(weight_dtype),)
-
+                    
                     #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
                     loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
 
@@ -279,6 +284,7 @@ def main():
                     optimizer.zero_grad()
 
                 prof.step()
+
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
                     progress_bar.update(1)
@@ -309,8 +315,7 @@ def main():
                                         shutil.rmtree(removing_checkpoint)
 
                             save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                            if not os.path.exists(save_path):
-                                os.mkdir(save_path)
+                            os.makedirs(save_path, exist_ok=True)
                             torch.save(dit.state_dict(), os.path.join(save_path, 'dit.bin'))
                             torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.bin'))
                             #accelerator.save_state(save_path)
@@ -321,8 +326,7 @@ def main():
 
                 if global_step >= args.max_train_steps:
                     break
-        
-        # prof.export_chrome_trace("trace_prof_flux_training.json")
+
         print(prof.key_averages().table(
             sort_by="cuda_time_total", 
             row_limit=10
@@ -333,4 +337,5 @@ def main():
 
 
 if __name__ == "__main__":
+    #torch.multiprocessing.set_start_method('spawn', force=True)  
     main()
