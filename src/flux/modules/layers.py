@@ -6,8 +6,9 @@ from einops import rearrange
 from torch import Tensor, nn
 
 from ..math import attention, rope
+# from ..fuse_math import attention, rope
 import torch.nn.functional as F
-
+from .freq_kernel import compute_frequencies_triton
 class EmbedND(nn.Module):
     def __init__(self, dim: int, theta: int, axes_dim: list[int]):
         super().__init__()
@@ -36,9 +37,10 @@ def timestep_embedding(t: Tensor, dim, max_period=10000, time_factor: float = 10
     """
     t = time_factor * t
     half = dim // 2
-    freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
-        t.device
-    )
+    # freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
+    #     t.device
+    # )
+    freqs = compute_frequencies_triton(half, max_period, t.device)
 
     args = t[:, None].float() * freqs[None]
     embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
@@ -555,8 +557,6 @@ class SingleStreamBlock(nn.Module):
             return self.processor(self, x, vec, pe)
         else:
             return self.processor(self, x, vec, pe, image_proj, ip_scale)
-
-
 
 class LastLayer(nn.Module):
     def __init__(self, hidden_size: int, patch_size: int, out_channels: int):

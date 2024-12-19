@@ -323,6 +323,10 @@ def main():
                     break
         
         # prof.export_chrome_trace("trace_prof_flux_training.json")
+        print(prof.key_averages().table(
+            sort_by="cuda_time_total", 
+            row_limit=10
+        ))
 
     accelerator.wait_for_everyone()
     accelerator.end_training()

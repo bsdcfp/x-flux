@@ -228,6 +228,7 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(dit):
+                # data["img"], data["img_ids"], data["txt"], data["txt_ids"], data["vec"]
                 x_1, img_ids, txt, txt_ids, vec = [item.to(accelerator.device, non_blocking=True) for item in batch]  
 
                 
@@ -241,16 +242,6 @@ def main():
                 # bsz = x_1.shape[0]
                 guidance_vec = torch.full((bs,), 4, device=x_t.device, dtype=x_t.dtype)  
 
-                # guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
-
-                # Predict the noise residual and compute loss
-                # model_pred = dit(img=x_t.to(weight_dtype),
-                #                 img_ids=inp['img_ids'].to(weight_dtype),
-                #                 txt=inp['txt'].to(weight_dtype),
-                #                 txt_ids=inp['txt_ids'].to(weight_dtype),
-                #                 y=inp['vec'].to(weight_dtype),
-                #                 timesteps=t.to(weight_dtype),
-                #                 guidance=guidance_vec.to(weight_dtype),)
                 model_pred = dit(img=x_t.to(weight_dtype),
                                 img_ids=img_ids.to(weight_dtype),
                                 txt=txt.to(weight_dtype),

@@ -15,7 +15,7 @@ source $ENV_PATH
 DEVICES_ID=(0)
 WORLD_SIZE=${#DEVICES_ID[@]}
 ACCELERATE_CONFIG=train_configs/accelerate_config.yaml
-DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
 # --deepspeed_config_file ${DEEPSPEED_CONFIG} \
 # --config_file ${ACCELERATE_CONFIG} \
       # --use_deepspeed \
