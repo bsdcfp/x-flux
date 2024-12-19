@@ -25,6 +25,12 @@ class EmbedND(nn.Module):
 
         return emb.unsqueeze(1)
 
+FREQ_CACHE = {}
+def get_frequencies(half: int, max_period: float = 10000.0, device='cuda'):
+    key = (half, max_period)
+    if key not in FREQ_CACHE:
+        FREQ_CACHE[key] = compute_frequencies_triton(half, max_period, device)
+    return FREQ_CACHE[key].to(device)
 
 def timestep_embedding(t: Tensor, dim, max_period=10000, time_factor: float = 1000.0):
     """
@@ -40,7 +46,7 @@ def timestep_embedding(t: Tensor, dim, max_period=10000, time_factor: float = 10
     # freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
     #     t.device
     # )
-    freqs = compute_frequencies_triton(half, max_period, t.device)
+    freqs = get_frequencies(half, float(max_period), t.device)
 
     args = t[:, None].float() * freqs[None]
     embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
