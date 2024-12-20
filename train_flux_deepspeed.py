@@ -45,6 +45,7 @@ from image_datasets.dataset_cuda import loader
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
+logger = get_logger(__name__, log_level="DEBUG")
 
 def deepspeed_zero_init_disabled_context_manager():
     """

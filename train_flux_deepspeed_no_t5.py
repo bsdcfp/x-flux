@@ -46,6 +46,7 @@ from image_datasets.dataset_processed import loader
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
+logger = get_logger(__name__, log_level="DEBUG")
 from torchinfo import summary  
 
 # def get_models(name: str, device, offload: bool, is_schnell: bool):

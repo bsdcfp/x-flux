@@ -24,6 +24,6 @@
         "module_depth": -1,
         "top_modules": 5,
         "detailed": true,
-        "output_file": "logs/flops_profiler_opt_H100.txt"
+        "output_file": "logs/deepspeed/flops_profiler_opt_H100.txt"
     }
 }

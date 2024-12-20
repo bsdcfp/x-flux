@@ -2,7 +2,7 @@ import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 # from dataset import CustomImageDataset
-from prefetch_generator import BackgroundGenerator
+# from prefetch_generator import BackgroundGenerator
 
 class CustomImageDatasetProcessed(Dataset):
     def __init__(self, img_dir, **kwargs):
@@ -36,7 +36,7 @@ class DataLoaderProcessed(DataLoader):
 def loader(train_batch_size, num_workers, **args):
     # torch.multiprocessing.set_start_method('spawn', force=True)
     dataset = CustomImageDatasetProcessed(**args)
-    return DataLoaderProcessed(dataset, 
+    return DataLoader(dataset, 
                       batch_size=train_batch_size, 
                       num_workers=num_workers, 
                       shuffle=True,
