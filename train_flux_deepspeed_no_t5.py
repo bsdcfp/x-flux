@@ -225,8 +225,10 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
 
+    losses = []
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
+        epoch_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(dit):
                 # data["img"], data["img_ids"], data["txt"], data["txt_ids"], data["vec"]
@@ -256,7 +258,10 @@ def main():
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                iter_loss = avg_loss.item() / args.gradient_accumulation_steps
+                train_loss += iter_loss
+                epoch_loss += iter_loss
+                # train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
                 # Backpropagate
                 accelerator.backward(loss)
@@ -307,9 +312,15 @@ def main():
 
             if global_step >= args.max_train_steps:
                 break
+        losses.append(epoch_loss / len(train_dataloader))
 
     accelerator.wait_for_everyone()
     accelerator.end_training()
+
+    from datetime import datetime
+    log_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    with open(f"logs/losses_{log_id}.txt", 'w') as f:
+        f.write(str(losses))
 
 
 if __name__ == "__main__":

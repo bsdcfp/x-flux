@@ -37,15 +37,15 @@ from einops import rearrange
 from src.flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
 from src.flux.util import (configs, load_ae, load_clip,
                        load_flow_model2, load_t5)
-
-from src.flux.aip_profiler import memory_profiler
 from image_datasets.dataset import loader
-
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
-logger = get_logger(__name__, log_level="DEBUG")
+from torch.profiler import profile, schedule, tensorboard_trace_handler
 
+tracing_schedule = schedule(skip_first=3, wait=2, warmup=2, active=3, repeat=2)
+trace_handler = tensorboard_trace_handler(dir_name="logs/flux_torch_profile", use_gzip=True)
+# torch.cuda.memory._record_memory_history(True)
 def deepspeed_zero_init_disabled_context_manager():
     """
     returns either a context list that includes one that will disable zero.Init or an empty context list
@@ -68,6 +68,7 @@ def get_models(name: str, device, offload: bool, is_schnell: bool):
             model = load_flow_model2(name, device="cpu")  
     else:  
         model = load_flow_model2(name, device="cpu")  
+
     return model, vae, t5, clip
 
 def parse_args():
@@ -83,8 +84,10 @@ def parse_args():
 
 
     return args.config
-
-@memory_profiler("./logs/mem_viz/snapshot_mem_timeline_flux.1_0.7B_train.pickle")
+# def trace_handler(prof):
+    # print(prof.key_averages().table(
+    #     sort_by="self_cuda_time_total", row_limit=-1))
+    # prof.export_chrome_trace("trace_prof_flux_train_step_" + str(prof.step_num) + ".json")
 def main():
 
     args = OmegaConf.load(parse_args())
@@ -128,12 +131,11 @@ def main():
     clip.requires_grad_(False)
     dit = dit.to(torch.float32)
     dit.train()
-
     optimizer_cls = torch.optim.AdamW
     #you can train your own layers
-    for n, param in dit.named_parameters():
-        if 'txt_attn' not in n:
-            param.requires_grad = False
+    # for n, param in dit.named_parameters():
+    #     if 'txt_attn' not in n:
+    #         param.requires_grad = False
 
     print(sum([p.numel() for p in dit.parameters() if p.requires_grad]) / 1000000, 'parameters')
     optimizer = optimizer_cls(
@@ -235,95 +237,112 @@ def main():
 
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(dit):
-                img, prompts = batch
-                with torch.no_grad():
-                    x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
-                    inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
-                    x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
-
-                bs = img.shape[0]
-                t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
-                t_expand = t[:, None, None]
-                x_0 = torch.randn_like(x_1).to(accelerator.device)
-                # x_t = (1 - t) * x_1 + t * x_0
-                x_t = (1 - t_expand) * x_1 + t_expand * x_0
-                bsz = x_1.shape[0]
-                guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
-
-                # Predict the noise residual and compute loss
-                model_pred = dit(img=x_t.to(weight_dtype),
-                                img_ids=inp['img_ids'].to(weight_dtype),
-                                txt=inp['txt'].to(weight_dtype),
-                                txt_ids=inp['txt_ids'].to(weight_dtype),
-                                y=inp['vec'].to(weight_dtype),
-                                timesteps=t.to(weight_dtype),
-                                guidance=guidance_vec.to(weight_dtype),)
-                
-                # get a graph
-                # if step == 1:
-                #     # make_dot(model_pred).render("dit_graph", format="png")
-                #     make_dot(model_pred, params=dict(dit.named_parameters()), show_attrs=True, show_saved=True)
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=tracing_schedule,
+            on_trace_ready=trace_handler,
+            profile_memory=True,
+            record_shapes=True,
+            with_stack=True,
+            with_flops=True,
+            with_modules=True
+        # on_trace_ready=torch.profiler.tensorboard_trace_handler('./log')
+        # used when outputting for tensorboard
+        ) as prof:
+            for step, batch in enumerate(train_dataloader):
+                with accelerator.accumulate(dit):
+                    img, prompts = batch
+                    with torch.no_grad():
+                        x_1 = vae.encode(img.to(accelerator.device).to(torch.float32))
+                        inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
+                        x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
 
 
-                #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
-                loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
+                    bs = img.shape[0]
+                    t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
+                    t_expand = t[:, None, None]
+                    x_0 = torch.randn_like(x_1).to(accelerator.device)
+                    # x_t = (1 - t) * x_1 + t * x_0
+                    x_t = (1 - t_expand) * x_1 + t_expand * x_0
+                    bsz = x_1.shape[0]
+                    guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
 
-                # Gather the losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                    # Predict the noise residual and compute loss
+                    model_pred = dit(img=x_t.to(weight_dtype),
+                                    img_ids=inp['img_ids'].to(weight_dtype),
+                                    txt=inp['txt'].to(weight_dtype),
+                                    txt_ids=inp['txt_ids'].to(weight_dtype),
+                                    y=inp['vec'].to(weight_dtype),
+                                    timesteps=t.to(weight_dtype),
+                                    guidance=guidance_vec.to(weight_dtype),)
 
-                # Backpropagate
-                accelerator.backward(loss)
+                    #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
+                    loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
+
+                    # Gather the losses across all processes for logging (if we use distributed training).
+                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                    train_loss += avg_loss.item() / args.gradient_accumulation_steps
+
+                    # Backpropagate
+                    accelerator.backward(loss)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(dit.parameters(), args.max_grad_norm)
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
+
+                prof.step()
+                # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(dit.parameters(), args.max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+                    progress_bar.update(1)
+                    global_step += 1
+                    accelerator.log({"train_loss": train_loss}, step=global_step)
+                    train_loss = 0.0
 
-            # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
-                progress_bar.update(1)
-                global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
-                train_loss = 0.0
+                    if global_step % args.checkpointing_steps == 0:
+                        if accelerator.is_main_process:
+                            # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+                            if args.checkpoints_total_limit is not None:
+                                checkpoints = os.listdir(args.output_dir)
+                                checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                if global_step % args.checkpointing_steps == 0:
-                    if accelerator.is_main_process:
-                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                        if args.checkpoints_total_limit is not None:
-                            checkpoints = os.listdir(args.output_dir)
-                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                                # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                                if len(checkpoints) >= args.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                    removing_checkpoints = checkpoints[0:num_to_remove]
 
-                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                            if len(checkpoints) >= args.checkpoints_total_limit:
-                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                removing_checkpoints = checkpoints[0:num_to_remove]
+                                    logger.info(
+                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                    )
+                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                logger.info(
-                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
-                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                                    for removing_checkpoint in removing_checkpoints:
+                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                        shutil.rmtree(removing_checkpoint)
 
-                                for removing_checkpoint in removing_checkpoints:
-                                    removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                    shutil.rmtree(removing_checkpoint)
+                            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                            if not os.path.exists(save_path):
+                                os.mkdir(save_path)
+                            torch.save(dit.state_dict(), os.path.join(save_path, 'dit.bin'))
+                            torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.bin'))
+                            #accelerator.save_state(save_path)
+                            logger.info(f"Saved state to {save_path}")
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        if not os.path.exists(save_path):
-                            os.mkdir(save_path)
-                        torch.save(dit.state_dict(), os.path.join(save_path, 'dit.bin'))
-                        torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.bin'))
-                        #accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
+                logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+                progress_bar.set_postfix(**logs)
 
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
-
-            if global_step >= args.max_train_steps:
-                break
+                if global_step >= args.max_train_steps:
+                    break
+        
+        # prof.export_chrome_trace("trace_prof_flux_training.json")
+        print(prof.key_averages().table(
+            sort_by="cuda_time_total", 
+            row_limit=10
+        ))
 
     accelerator.wait_for_everyone()
     accelerator.end_training()

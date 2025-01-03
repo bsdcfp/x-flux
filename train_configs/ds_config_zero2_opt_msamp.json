@@ -15,15 +15,11 @@
         },
         "round_robin_gradients": true
     },
+    "msamp": {
+        "enabled": true,
+        "opt_level": "O3"
+    },
     "deepspeed_transformer_kernel": true,
     "gradient_accumulation_steps": 1,
-    "gradient_clipping": 1.0,
-    "flops_profiler": {
-        "enabled": true,
-        "profile_step": 8,
-        "module_depth": -1,
-        "top_modules": 5,
-        "detailed": true,
-        "output_file": "logs/deepspeed/flops_profiler_opt_H100.txt"
-    }
+    "gradient_clipping": 1.0
 }

@@ -14,33 +14,59 @@ source $ENV_PATH
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(0 6)
 DEVICES_ID=(0 2 3 7)
+DEVICES_ID=(4 5 6 7)
+DEVICES_ID=(0 1 2 3 4 5 6 7)
 WORLD_SIZE=${#DEVICES_ID[@]}
-ACCELERATE_CONFIG=train_configs/accelerate_config.yaml
-DEEPSPEED_CONFIG=train_configs/ds_config_zero2_business.json
-# DEEPSPEED_CONFIG=train_configs/ds_config_zero3.json
-      #--deepspeed_config_file ${DEEPSPEED_CONFIG} \
+TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_profiler.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_default.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
 
-rank_id=0
+MAIN_SCRIPT=train_flux_deepspeed_no_t5.py
+MAIN_SCRIPT=train_flux_deepspeed_total_params_no_t5.py
+MAIN_SCRIPT=train_flux_deepspeed_total_params.py
+TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_total_params.py
+# TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_total_params_torch_profile.py
+
 START_TIME=$(date +%s)
 echo "Start Time: $(date)"
 
+rank_id=0
 for i in ${DEVICES_ID[@]}; do
     echo "Running On GPU_$i"
     export CUDA_VISIBLE_DEVICES=$i
     export RANK=$rank_id
-    cmd="accelerate launch \
-      --num_processes $WORLD_SIZE \
-      --num_machines $WORLD_SIZE \
-      --machine_rank $RANK \
-      --main_process_ip $MASTER_ADDR \
-      --main_process_port $MASTER_PORT \
-      --deepspeed_multinode_launcher standard \
-      --use_deepspeed \
-      --mixed_precision bf16 \
-      --deepspeed_config_file ${DEEPSPEED_CONFIG} \
-      train_flux_deepspeed_total_params.py --config 'train_configs/test_finetune_H100.yaml' "
+    if [ $RANK -eq 0 ];then
+        echo "Running On GPU_$i, RANK_$RANK"
+        cmd="accelerate launch \
+            --num_processes $WORLD_SIZE \
+            --num_machines $WORLD_SIZE \
+            --machine_rank $RANK \
+            --main_process_ip $MASTER_ADDR \
+            --main_process_port $MASTER_PORT \
+            --deepspeed_multinode_launcher standard \
+            --use_deepspeed \
+            --deepspeed_config_file ${DEEPSPEED_CONFIG} \
+            --mixed_precision bf16 \
+            ${TORCH_PROFILE_MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
+    else
+            echo "Running On GPU_$i, RANK_$RANK"
+            cmd="accelerate launch \
+                --num_processes $WORLD_SIZE \
+                --num_machines $WORLD_SIZE \
+                --machine_rank $RANK \
+                --main_process_ip $MASTER_ADDR \
+                --main_process_port $MASTER_PORT \
+                --deepspeed_multinode_launcher standard \
+                --use_deepspeed \
+                --deepspeed_config_file ${DEEPSPEED_CONFIG} \
+                --mixed_precision bf16 \
+                ${MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
+    fi
+
     if [ "$is_dry_run" = false ]; then
-	    eval $cmd | tee -a $WORKDIR/logs/train_log_${EXP_ID}.txt &
+	    eval $cmd &
     else
             echo "export CUDA_VISIBLE_DEVICES=$i"
             echo "export RANK=$rank_id"

@@ -13,18 +13,21 @@ ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
 # DEVICES_ID=(0)
 # DEVICES_ID=(0 2)
-# DEVICES_ID=(0 1 2 3)
 DEVICES_ID=(2 3 4 5)
+DEVICES_ID=(1 3 4 5)
+DEVICES_ID=(4 5)
+DEVICES_ID=(0 1 2 3)
+DEVICES_ID=(4 5 6 7)
 # DEVICES_ID=(0 2 3 4)
 # DEVICES_ID=(0 4 5 7)
 # DEVICES_ID=(0 1 2 3 4 5 6 7)
 WORLD_SIZE=${#DEVICES_ID[@]}
 TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
-DEEPSPEED_CONFIG=train_configs/ds_config_zero2_default.json
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_default.json
 
-MAIN_SCRIPT=train_flux_deepspeed_mem_viz.py
+MAIN_SCRIPT=train_flux_deepspeed_no_t5_nvtx.py
 MAIN_SCRIPT=train_flux_deepspeed_no_t5.py
 
 # 记录开始时间
@@ -49,6 +52,12 @@ ELAPSED_TIME=$((END_PREPARE_DATA_TIME - START_TIME))
 echo "Total prepare datasets Time: $ELAPSED_TIME seconds"
 
 # training
+      # --dynamo_backend inductor \
+      # --dynamo_backend eager \
+      # --dynamo_backend aot_eager \
+      # --dynamo_backend aot_ts_nvfuser \
+      # --dynamo_backend nvprims_nvfuser \
+      # --dynamo_backend cudagraphs \
 rank_id=0
 for i in ${DEVICES_ID[@]}; do
     echo "Running On GPU_$i"

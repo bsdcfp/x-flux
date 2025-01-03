@@ -8,3 +8,4 @@ export MASTER_PORT=12321
 export FLUX_DEV=/model_zoo/flux.1_dev/flux1-dev.safetensors
 export AE=/model_zoo/flux.1_dev/ae.safetensors
 export NCCL_HOST_ID=0
+# export NCCL_DEBUG=INFO

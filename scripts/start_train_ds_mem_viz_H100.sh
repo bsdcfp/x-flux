@@ -15,15 +15,16 @@ source $ENV_PATH
 # DEVICES_ID=(0 6)
 # DEVICES_ID=(4 5 6 7)
 DEVICES_ID=(2 3 4 5)
+DEVICES_ID=(2 3 4 6)
 # DEVICES_ID=(0 1 4 5)
 WORLD_SIZE=${#DEVICES_ID[@]}
 TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
 DEEPSPEED_CONFIG=train_configs/ds_config_zero3_default.json
-DEEPSPEED_CONFIG=train_configs/ds_config_zero3_opt.json
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero3_opt.json
 
-MAIN_SCRIPT=train_flux_deepspeed_mem_viz.py
 MAIN_SCRIPT=train_flux_deepspeed_no_t5_mem_viz.py
+MAIN_SCRIPT=train_flux_deepspeed_mem_viz.py
 
 START_TIME=$(date +%s)
 echo "Start Time: $(date)"

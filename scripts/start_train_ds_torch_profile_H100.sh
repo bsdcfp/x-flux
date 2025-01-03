@@ -11,12 +11,37 @@ cd $WORKDIR
 
 ENV_PATH=$WORKDIR/scripts/flux_env/master_env_H100.sh
 source $ENV_PATH
+
+DEVICES_ID=(1 2 3 6)
+DEVICES_ID=(2 3 4 5)
+DEVICES_ID=(1 3 4 5)
+DEVICES_ID=(4 5 6 7)
+DEVICES_ID=(0 1 2 3)
+# DEVICES_ID=(4 5)
 # DEVICES_ID=(0 4 5 7)
-DEVICES_ID=(0 1)
+
+SINGLE_DEVICE_BATCH=1
+
 WORLD_SIZE=${#DEVICES_ID[@]}
 
+TRAINING_CONFIG=train_configs/test_finetune_H100.yaml
+
 DEEPSPEED_CONFIG=train_configs/ds_config_zero2_offload.json
-ACCELERATE_CONFIG=train_configs/ds_config.yaml
+DEEPSPEED_CONFIG=train_configs/ds_config_zero3_opt.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_opt.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero2_default.json
+DEEPSPEED_CONFIG=train_configs/ds_config_zero3_default.json
+
+MAIN_SCRIPT=train_flux_deepspeed_no_t5.py
+MAIN_SCRIPT="train_flux_deepspeed_gradient_ckpt_no_t5.py --gradient_checkpointing"
+MAIN_SCRIPT="train_flux_deepspeed_gradient_ckpt.py --gradient_checkpointing"
+MAIN_SCRIPT=train_flux_deepspeed.py
+
+# TORCH_PROFILE_MAIN_SCRIPT="train_flux_deepspeed_gradient_ckpt_torch_profile.py --gradient_checkpointing"
+# TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_no_t5_torch_profile.py
+TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_torch_profile.py
+TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_no_t5_mem_viz.py
+TORCH_PROFILE_MAIN_SCRIPT=train_flux_deepspeed_mem_viz.py
 
 START_TIME=$(date +%s)
 echo "Start Time: $(date)"
@@ -35,8 +60,9 @@ for i in ${DEVICES_ID[@]}; do
             --main_process_port $MASTER_PORT \
             --deepspeed_multinode_launcher standard \
             --use_deepspeed \
+            --deepspeed_config_file ${DEEPSPEED_CONFIG} \
             --mixed_precision bf16 \
-            train_flux_deepspeed_torch_profile.py --config 'train_configs/test_finetune_H100.yaml' "
+            ${TORCH_PROFILE_MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
     else
             echo "Running On GPU_$i, RANK_$RANK"
             cmd="accelerate launch \
@@ -47,8 +73,9 @@ for i in ${DEVICES_ID[@]}; do
                 --main_process_port $MASTER_PORT \
                 --deepspeed_multinode_launcher standard \
                 --use_deepspeed \
+                --deepspeed_config_file ${DEEPSPEED_CONFIG} \
                 --mixed_precision bf16 \
-                train_flux_deepspeed.py --config 'train_configs/test_finetune_H100.yaml' "
+                ${MAIN_SCRIPT} --config ${TRAINING_CONFIG}"
     fi
 
     if [ "$is_dry_run" = false ]; then

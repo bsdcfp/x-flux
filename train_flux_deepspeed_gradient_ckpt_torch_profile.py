@@ -37,38 +37,25 @@ from einops import rearrange
 from src.flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
 from src.flux.util import (configs, load_ae, load_clip,
                        load_flow_model2, load_t5)
+
+from src.flux.aip_profiler import memory_profiler
 from image_datasets.dataset import loader
+
 if is_wandb_available():
     import wandb
 logger = get_logger(__name__, log_level="INFO")
+from torchinfo import summary  
 from torch.profiler import profile, schedule, tensorboard_trace_handler
 
 tracing_schedule = schedule(skip_first=3, wait=2, warmup=2, active=3, repeat=2)
 trace_handler = tensorboard_trace_handler(dir_name="logs/flux_torch_profile", use_gzip=True)
-# torch.cuda.memory._record_memory_history(True)
-def deepspeed_zero_init_disabled_context_manager():
-    """
-    returns either a context list that includes one that will disable zero.Init or an empty context list
-    """
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin if accelerate.state.is_initialized() else None
-    if deepspeed_plugin is None:
-        print("DeepSpeed plugin not found. Proceeding without disabling zero.Init.")
-        return []
-
-    return [deepspeed_plugin.zero3_init_context_manager(enable=False)]
 
 def get_models(name: str, device, offload: bool, is_schnell: bool):
-    with ContextManagers(deepspeed_zero_init_disabled_context_manager()):
-        t5 = load_t5(device, max_length=256 if is_schnell else 512)
-        clip = load_clip(device)
-        vae = load_ae(name, device="cpu" if offload else device)
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin if accelerate.state.is_initialized() else None  
-    if deepspeed_plugin is not None:  
-        with deepspeed_plugin.zero3_init_context_manager(enable=True):  
-            model = load_flow_model2(name, device="cpu")  
-    else:  
-        model = load_flow_model2(name, device="cpu")  
-
+    t5 = load_t5(device, max_length=256 if is_schnell else 512)
+    clip = load_clip(device)
+    clip.requires_grad_(False)
+    model = load_flow_model2(name, device="cpu")
+    vae = load_ae(name, device="cpu" if offload else device)
     return model, vae, t5, clip
 
 def parse_args():
@@ -80,26 +67,31 @@ def parse_args():
         required=True,
         help="path to config",
     )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        default=False,
+        action="store_true",
+        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
+    )
     args = parser.parse_args()
 
 
-    return args.config
-# def trace_handler(prof):
-    # print(prof.key_averages().table(
-    #     sort_by="self_cuda_time_total", row_limit=-1))
-    # prof.export_chrome_trace("trace_prof_flux_train_step_" + str(prof.step_num) + ".json")
+    return args
+
+# @memory_profiler("./snapshot_mem_timeline_flux.1_train.pickle")
 def main():
 
-    args = OmegaConf.load(parse_args())
-    is_schnell = args.model_name == "flux-schnell"
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
+    args = parse_args()
+    configs = OmegaConf.load(args.config)
+    is_schnell = configs.model_name == "flux-schnell"
+    logging_dir = os.path.join(configs.output_dir, configs.logging_dir)
 
-    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
+    accelerator_project_config = ProjectConfiguration(project_dir=configs.output_dir, logging_dir=logging_dir)
 
     accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
+        gradient_accumulation_steps=configs.gradient_accumulation_steps,
+        mixed_precision=configs.mixed_precision,
+        log_with=configs.report_to,
         project_config=accelerator_project_config,
     )
 
@@ -121,16 +113,19 @@ def main():
 
 
     if accelerator.is_main_process:
-        if args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
+        if configs.output_dir is not None:
+            os.makedirs(configs.output_dir, exist_ok=True)
 
-    dit, vae, t5, clip = get_models(name=args.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
+    dit, vae, t5, clip = get_models(name=configs.model_name, device=accelerator.device, offload=False, is_schnell=is_schnell)
 
     vae.requires_grad_(False)
     t5.requires_grad_(False)
     clip.requires_grad_(False)
     dit = dit.to(torch.float32)
     dit.train()
+    if args.gradient_checkpointing:
+        dit.enable_gradient_checkpointing()
+
     optimizer_cls = torch.optim.AdamW
     #you can train your own layers
     for n, param in dit.named_parameters():
@@ -140,54 +135,54 @@ def main():
     print(sum([p.numel() for p in dit.parameters() if p.requires_grad]) / 1000000, 'parameters')
     optimizer = optimizer_cls(
         [p for p in dit.parameters() if p.requires_grad],
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
+        lr=configs.learning_rate,
+        betas=(configs.adam_beta1, configs.adam_beta2),
+        weight_decay=configs.adam_weight_decay,
+        eps=configs.adam_epsilon,
     )
 
-    train_dataloader = loader(**args.data_config)
+    train_dataloader = loader(**configs.data_config)
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / configs.gradient_accumulation_steps)
+    if configs.max_train_steps is None:
+        configs.max_train_steps = configs.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
     lr_scheduler = get_scheduler(
-        args.lr_scheduler,
+        configs.lr_scheduler,
         optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
-        num_training_steps=args.max_train_steps * accelerator.num_processes,
+        num_warmup_steps=configs.lr_warmup_steps * accelerator.num_processes,
+        num_training_steps=configs.max_train_steps * accelerator.num_processes,
     )
     global_step = 0
     first_epoch = 0
 
     # Potentially load in the weights and states from a previous save
-    if args.resume_from_checkpoint:
-        if args.resume_from_checkpoint != "latest":
-            path = os.path.basename(args.resume_from_checkpoint)
+    if configs.resume_from_checkpoint:
+        if configs.resume_from_checkpoint != "latest":
+            path = os.path.basename(configs.resume_from_checkpoint)
         else:
             # Get the most recent checkpoint
-            dirs = os.listdir(args.output_dir)
+            dirs = os.listdir(configs.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
             accelerator.print(
-                f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
+                f"Checkpoint '{configs.resume_from_checkpoint}' does not exist. Starting a new training run."
             )
-            args.resume_from_checkpoint = None
+            configs.resume_from_checkpoint = None
             initial_global_step = 0
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
-            dit_state = torch.load(os.path.join(args.output_dir, path, 'dit.bin'), map_location='cpu')
+            dit_state = torch.load(os.path.join(configs.output_dir, path, 'dit.bin'), map_location='cpu')
             dit_state2 = {}
             for k in dit_state.keys():
                 dit_state2[k[len('module.'):]] = dit_state[k]
             dit.load_state_dict(dit_state2)
-            optimizer_state = torch.load(os.path.join(args.output_dir, path, 'optimizer.bin'), map_location='cpu')['base_optimizer_state']
+            optimizer_state = torch.load(os.path.join(configs.output_dir, path, 'optimizer.bin'), map_location='cpu')['base_optimizer_state']
             optimizer.load_state_dict(optimizer_state)
 
             global_step = int(path.split("-")[1])
@@ -204,38 +199,38 @@ def main():
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
-        args.mixed_precision = accelerator.mixed_precision
+        configs.mixed_precision = accelerator.mixed_precision
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
-        args.mixed_precision = accelerator.mixed_precision
+        configs.mixed_precision = accelerator.mixed_precision
 
 
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / configs.gradient_accumulation_steps)
     if overrode_max_train_steps:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+        configs.max_train_steps = configs.num_train_epochs * num_update_steps_per_epoch
+    configs.num_train_epochs = math.ceil(configs.max_train_steps / num_update_steps_per_epoch)
 
     if accelerator.is_main_process:
-        accelerator.init_trackers(args.tracker_project_name, {"test": None})
+        accelerator.init_trackers(configs.tracker_project_name, {"test": None})
 
     timesteps = list(torch.linspace(1, 0, 1000).numpy())
-    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = configs.train_batch_size * accelerator.num_processes * configs.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
+    logger.info(f"  Num Epochs = {configs.num_train_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {configs.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    logger.info(f"  Gradient Accumulation steps = {configs.gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {configs.max_train_steps}")
 
     progress_bar = tqdm(
-        range(0, args.max_train_steps),
+        range(0, configs.max_train_steps),
         initial=initial_global_step,
         desc="Steps",
         disable=not accelerator.is_local_main_process,
     )
 
-    for epoch in range(first_epoch, args.num_train_epochs):
+    for epoch in range(first_epoch, configs.num_train_epochs):
         train_loss = 0.0
         with torch.profiler.profile(
             activities=[
@@ -260,7 +255,6 @@ def main():
                         inp = prepare(t5=t5, clip=clip, img=x_1, prompt=prompts)
                         x_1 = rearrange(x_1, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
 
-
                     bs = img.shape[0]
                     t = torch.sigmoid(torch.randn((bs,), device=accelerator.device))
                     t_expand = t[:, None, None]
@@ -278,18 +272,18 @@ def main():
                                     y=inp['vec'].to(weight_dtype),
                                     timesteps=t.to(weight_dtype),
                                     guidance=guidance_vec.to(weight_dtype),)
-
+                    
                     #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
                     loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
 
                     # Gather the losses across all processes for logging (if we use distributed training).
-                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                    train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                    avg_loss = accelerator.gather(loss.repeat(configs.train_batch_size)).mean()
+                    train_loss += avg_loss.item() / configs.gradient_accumulation_steps
 
                     # Backpropagate
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
-                        accelerator.clip_grad_norm_(dit.parameters(), args.max_grad_norm)
+                        accelerator.clip_grad_norm_(dit.parameters(), configs.max_grad_norm)
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad()
@@ -302,17 +296,17 @@ def main():
                     accelerator.log({"train_loss": train_loss}, step=global_step)
                     train_loss = 0.0
 
-                    if global_step % args.checkpointing_steps == 0:
+                    if global_step % configs.checkpointing_steps == 0:
                         if accelerator.is_main_process:
                             # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                            if args.checkpoints_total_limit is not None:
-                                checkpoints = os.listdir(args.output_dir)
+                            if configs.checkpoints_total_limit is not None:
+                                checkpoints = os.listdir(configs.output_dir)
                                 checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
                                 checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
                                 # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                                if len(checkpoints) >= args.checkpoints_total_limit:
-                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                if len(checkpoints) >= configs.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - configs.checkpoints_total_limit + 1
                                     removing_checkpoints = checkpoints[0:num_to_remove]
 
                                     logger.info(
@@ -321,12 +315,11 @@ def main():
                                     logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
                                     for removing_checkpoint in removing_checkpoints:
-                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                        removing_checkpoint = os.path.join(configs.output_dir, removing_checkpoint)
                                         shutil.rmtree(removing_checkpoint)
 
-                            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                            if not os.path.exists(save_path):
-                                os.mkdir(save_path)
+                            save_path = os.path.join(configs.output_dir, f"checkpoint-{global_step}")
+                            os.makedirs(save_path, exist_ok=True)
                             torch.save(dit.state_dict(), os.path.join(save_path, 'dit.bin'))
                             torch.save(optimizer.state_dict(), os.path.join(save_path, 'optimizer.bin'))
                             #accelerator.save_state(save_path)
@@ -335,10 +328,9 @@ def main():
                 logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 progress_bar.set_postfix(**logs)
 
-                if global_step >= args.max_train_steps:
+                if global_step >= configs.max_train_steps:
                     break
-        
-        # prof.export_chrome_trace("trace_prof_flux_training.json")
+
         print(prof.key_averages().table(
             sort_by="cuda_time_total", 
             row_limit=10

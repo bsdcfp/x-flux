@@ -39,8 +39,7 @@ from src.flux.util import (configs, load_ae, load_clip,
                        load_flow_model2, load_t5)
 
 from src.flux.aip_profiler import memory_profiler
-# from image_datasets.dataset import loader
-from image_datasets.dataset_cuda import loader
+from image_datasets.dataset import loader
 
 if is_wandb_available():
     import wandb
@@ -117,7 +116,6 @@ def main():
         datasets.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
-
 
     if accelerator.is_main_process:
         if args.output_dir is not None:
@@ -234,8 +232,10 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
 
+    losses = []
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
+        epoch_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(dit):
                 img, prompts = batch
@@ -262,18 +262,14 @@ def main():
                                 timesteps=t.to(weight_dtype),
                                 guidance=guidance_vec.to(weight_dtype),)
                 
-                # get a graph
-                # if step == 1:
-                #     # make_dot(model_pred).render("dit_graph", format="png")
-                #     make_dot(model_pred, params=dict(dit.named_parameters()), show_attrs=True, show_saved=True)
-
-
                 #loss = F.mse_loss(model_pred.float(), (x_1 - x_0).float(), reduction="mean")
                 loss = F.mse_loss(model_pred.float(), (x_0 - x_1).float(), reduction="mean")
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                iter_loss = avg_loss.item() / args.gradient_accumulation_steps
+                train_loss += iter_loss
+                epoch_loss += iter_loss
 
                 # Backpropagate
                 accelerator.backward(loss)
@@ -325,10 +321,15 @@ def main():
 
             if global_step >= args.max_train_steps:
                 break
+        losses.append(epoch_loss / len(train_dataloader))
 
     accelerator.wait_for_everyone()
     accelerator.end_training()
 
+    from datetime import datetime
+    log_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    with open(f"logs/losses_{log_id}.txt", 'w') as f:
+        f.write(str(losses))
 
 if __name__ == "__main__":
     main()

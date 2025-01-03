@@ -74,7 +74,7 @@ def parse_args():
 
     return args.config
 
-@memory_profiler(f"./snapshot_mem_timeline_flux_total_params.pickle")
+#@memory_profiler(f"./snapshot_mem_timeline_flux_total_params.pickle")
 def main():
 
     args = OmegaConf.load(parse_args())
@@ -242,16 +242,6 @@ def main():
                 # bsz = x_1.shape[0]
                 guidance_vec = torch.full((bs,), 4, device=x_t.device, dtype=x_t.dtype)  
 
-                # guidance_vec = torch.full((x_t.shape[0],), 4, device=x_t.device, dtype=x_t.dtype)
-
-                # Predict the noise residual and compute loss
-                # model_pred = dit(img=x_t.to(weight_dtype),
-                #                 img_ids=inp['img_ids'].to(weight_dtype),
-                #                 txt=inp['txt'].to(weight_dtype),
-                #                 txt_ids=inp['txt_ids'].to(weight_dtype),
-                #                 y=inp['vec'].to(weight_dtype),
-                #                 timesteps=t.to(weight_dtype),
-                #                 guidance=guidance_vec.to(weight_dtype),)
                 model_pred = dit(img=x_t.to(weight_dtype),
                                 img_ids=img_ids.to(weight_dtype),
                                 txt=txt.to(weight_dtype),
